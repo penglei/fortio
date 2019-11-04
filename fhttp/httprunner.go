@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"sort"
+	"time"
 
 	"fortio.org/fortio/log"
 	"fortio.org/fortio/periodic"
@@ -51,9 +52,10 @@ type HTTPRunnerResults struct {
 
 // Run tests http request fetching. Main call being run at the target QPS.
 // To be set as the Function in RunnerOptions.
-func (httpstate *HTTPRunnerResults) Run(t int) {
-	log.Debugf("Calling in %d", t)
-	code, body, headerSize := httpstate.client.Fetch()
+func (httpstate *HTTPRunnerResults) Run(tid int, rid int64) {
+	log.Infof("run request(%d) within MainLoop, time:%d, thread: %d", rid, time.Now().UnixNano()/1000/1000, tid)
+	log.Debugf("Calling in %d", tid)
+	code, body, headerSize := httpstate.client.FetchWithReqID(rid)
 	size := len(body)
 	log.Debugf("Got in %3d hsz %d sz %d - will abort on %d", code, headerSize, size, httpstate.AbortOn)
 	httpstate.RetCodes[code]++
@@ -76,6 +78,44 @@ type HTTPRunnerOptions struct {
 	AbortOn int
 }
 
+func CalcNumCalls(r *HTTPRunnerOptions) (int64, int64) {
+	useQPS := (r.QPS > 0)
+	hasDuration := (r.Duration > 0)
+	useExactly := (r.Exactly > 0)
+	var numCalls int64 = 0
+	var leftOver int64 = 0 // left over from r.Exactly / numThreads
+	if useQPS {
+		if hasDuration || useExactly {
+			numCalls = int64(r.QPS * r.Duration.Seconds())
+			if useExactly {
+				numCalls = r.Exactly
+			}
+			if numCalls < 2 {
+				numCalls = 2
+				r.NumThreads = 1
+			}
+			if int64(2*r.NumThreads) > numCalls {
+				newN := int(numCalls / 2)
+				r.NumThreads = newN
+			}
+			numCalls /= int64(r.NumThreads)
+			totalCalls := numCalls * int64(r.NumThreads)
+			if useExactly {
+				leftOver = r.Exactly - totalCalls
+			}
+		} else {
+			numCalls = 0
+		}
+	} else {
+		if useExactly {
+			numCalls = r.Exactly / int64(r.NumThreads)
+			leftOver = r.Exactly % int64(r.NumThreads)
+		}
+	}
+
+	return numCalls, leftOver
+}
+
 // RunHTTPTest runs an http test and returns the aggregated stats.
 func RunHTTPTest(o *HTTPRunnerOptions) (*HTTPRunnerResults, error) {
 	o.RunType = "HTTP"
@@ -93,11 +133,16 @@ func RunHTTPTest(o *HTTPRunnerOptions) (*HTTPRunnerResults, error) {
 		AbortOn:     o.AbortOn,
 		aborter:     r.Options().Stop,
 	}
+	numCalls, _ := CalcNumCalls(o) //XXX we ignore leftOvers
 	httpstate := make([]HTTPRunnerResults, numThreads)
 	for i := 0; i < numThreads; i++ {
 		r.Options().Runners[i] = &httpstate[i]
 		// Create a client (and transport) and connect once for each 'thread'
-		httpstate[i].client = NewClient(&o.HTTPOptions)
+		c := NewClient(&o.HTTPOptions)
+		if fastClient, ok := c.(*FastClient); ok {
+			fastClient.GenerateReqCaches(&o.HTTPOptions, i, numCalls)
+		}
+		httpstate[i].client = c
 		if httpstate[i].client == nil {
 			return nil, fmt.Errorf("unable to create client %d for %s", i, o.URL)
 		}

@@ -87,7 +87,7 @@ type GRPCRunnerResults struct {
 
 // Run exercises GRPC health check or ping at the target QPS.
 // To be set as the Function in RunnerOptions.
-func (grpcstate *GRPCRunnerResults) Run(t int) {
+func (grpcstate *GRPCRunnerResults) Run(t int, rid int64) {
 	log.Debugf("Calling in %d", t)
 	var err error
 	var res interface{}

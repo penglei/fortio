@@ -51,8 +51,10 @@ var DefaultRunnerOptions = RunnerOptions{
 
 // Runnable are the function to run periodically.
 type Runnable interface {
-	Run(tid int)
+	Run(tid int, rid int64)
 }
+
+// Run2(tid int, rid int64)
 
 // MakeRunners creates an array of NumThreads identical Runnable instances.
 // (for the (rare/test) cases where there is no unique state needed)
@@ -469,17 +471,19 @@ func (r *periodicRunner) Run() RunnerResults {
 }
 
 // runOne runs in 1 go routine.
-func runOne(id int, runnerChan chan struct{},
+func runOne(threadId int, runnerChan chan struct{},
 	funcTimes *stats.Histogram, sleepTimes *stats.Histogram, numCalls int64, start time.Time, r *periodicRunner) {
 	var i int64
 	endTime := start.Add(r.Duration)
-	tIDStr := fmt.Sprintf("T%03d", id)
+	tIDStr := fmt.Sprintf("T%03d", threadId)
 	perThreadQPS := r.QPS / float64(r.NumThreads)
 	useQPS := (perThreadQPS > 0)
 	hasDuration := (r.Duration > 0)
 	useExactly := (r.Exactly > 0)
-	f := r.Runners[id]
+	f := r.Runners[threadId]
 
+	var reqId = int64(threadId) * numCalls
+	log.Infof("run MainLoop in the thread: %d, qps: %d, duration: %d, numCalls: %d", threadId, int64(perThreadQPS), int64(r.Duration/1000000000), numCalls)
 MainLoop:
 	for {
 		fStart := time.Now()
@@ -495,9 +499,10 @@ MainLoop:
 				break
 			}
 		}
-		f.Run(id)
+		f.Run(threadId, reqId)
 		funcTimes.Record(time.Since(fStart).Seconds())
 		i++
+		reqId += 1
 		// if using QPS / pre calc expected call # mode:
 		if useQPS {
 			if (useExactly || hasDuration) && i >= numCalls {

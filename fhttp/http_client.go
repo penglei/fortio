@@ -39,6 +39,7 @@ import (
 type Fetcher interface {
 	// Fetch returns http code, data, offset of body (for client which returns
 	// headers)
+	FetchWithReqID(rid int64) (int, []byte, int)
 	Fetch() (int, []byte, int)
 	// Close() cleans up connections and state - must be paired with NewClient calls.
 	// returns how many sockets have been used (Fastclient only)
@@ -352,6 +353,11 @@ func (c *Client) Fetch() (int, []byte, int) {
 	return code, data, 0
 }
 
+func (c *Client) FetchWithReqID(rid int64) (int, []byte, int) {
+	c.req.Header.Set("x-id", strconv.FormatInt(rid, 10))
+	return c.Fetch()
+}
+
 // NewClient creates either a standard or fast client (depending on
 // the DisableFastClient flag)
 func NewClient(o *HTTPOptions) Fetcher {
@@ -433,6 +439,7 @@ func Fetch(httpOptions *HTTPOptions) (int, []byte) {
 // FastClient is a fast, lockfree single purpose http 1.0/1.1 client.
 type FastClient struct {
 	buffer       []byte
+	reqCaches    map[int64][]byte
 	req          []byte
 	dest         net.Addr
 	socket       net.Conn
@@ -510,6 +517,7 @@ func NewFastClient(o *HTTPOptions) Fetcher {
 		return nil
 	}
 	bc.dest = addr
+
 	// Create the bytes for the request:
 	host := bc.host
 	customHostHeader := (o.hostOverride != "")
@@ -521,6 +529,7 @@ func NewFastClient(o *HTTPOptions) Fetcher {
 	if !bc.http10 || customHostHeader {
 		buf.WriteString("Host: " + host + "\r\n")
 	}
+
 	if !bc.http10 {
 		// Rest of normal http 1.1 processing:
 		bc.parseHeaders = true
@@ -542,7 +551,59 @@ func NewFastClient(o *HTTPOptions) Fetcher {
 	}
 	bc.req = buf.Bytes()
 	log.Debugf("Created client:\n%+v\n%s", bc.dest, bc.req)
+	bc.reqCaches = make(map[int64][]byte)
 	return &bc
+}
+
+func (c *FastClient) createReqBuffer(o *HTTPOptions) *bytes.Buffer {
+	host := c.host
+	customHostHeader := (o.hostOverride != "")
+	if customHostHeader {
+		host = o.hostOverride
+	}
+
+	proto := "1.1"
+	if o.HTTP10 {
+		proto = "1.0"
+	}
+	method := o.Method()
+	urlObject, _ := url.Parse(o.URL)
+	var buf bytes.Buffer
+	buf.WriteString(method + " " + urlObject.RequestURI() + " HTTP/" + proto + "\r\n")
+	if !c.http10 || customHostHeader {
+		buf.WriteString("Host: " + host + "\r\n")
+	}
+	return &buf
+}
+
+func (c *FastClient) GenerateReqCaches(o *HTTPOptions, tid int, numCalls int64) {
+	baseId := int64(tid) * numCalls
+	for i := int64(0); i < numCalls; i += 1 {
+		rid := baseId + i
+		buf := c.createReqBuffer(o)
+		buf.WriteString(fmt.Sprintf("x-id: %d\r\n", rid))
+		if !c.http10 {
+			// Rest of normal http 1.1 processing:
+			c.parseHeaders = true
+			if !o.DisableKeepAlive {
+				c.keepAlive = true
+			} else {
+				buf.WriteString("Connection: close\r\n")
+			}
+		}
+		w := bufio.NewWriter(buf)
+		// This writes multiple valued headers properly (unlike calling Get() to do it ourselves)
+		o.GenerateHeaders().Write(w) // nolint: errcheck,gas
+		w.Flush()                    // nolint: errcheck,gas
+		buf.WriteString("\r\n")
+		//Add the payload to http body
+		payloadLen := len(o.Payload)
+		if payloadLen > 0 {
+			buf.Write(o.Payload)
+		}
+		req := buf.Bytes()
+		c.reqCaches[rid] = req
+	}
 }
 
 // return the result from the state.
@@ -639,6 +700,14 @@ func (c *FastClient) Fetch() (int, []byte, int) {
 	}
 	// Return the result:
 	return c.returnRes()
+}
+
+func (c *FastClient) FetchWithReqID(rid int64) (int, []byte, int) {
+	req, ok := c.reqCaches[rid]
+	if ok {
+		c.req = req
+	}
+	return c.Fetch()
 }
 
 // Response reading:

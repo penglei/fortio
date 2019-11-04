@@ -26,7 +26,7 @@ import (
 
 type Noop struct{}
 
-func (n *Noop) Run(t int) {
+func (n *Noop) Run(t int, rid int64) {
 }
 
 // used for when we don't actually run periodic test/want to initialize
@@ -74,7 +74,7 @@ type TestCount struct {
 	lock  *sync.Mutex
 }
 
-func (c *TestCount) Run(i int) {
+func (c *TestCount) Run(i int, rid int64) {
 	c.lock.Lock()
 	(*c.count)++
 	c.lock.Unlock()
