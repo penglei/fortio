@@ -95,9 +95,11 @@ const (
 // coming from flags and AddAndValidateExtraHeader().
 // Warning this gets called more than once, do not generate duplicate headers.
 func (h *HTTPOptions) GenerateHeaders() http.Header {
-	if h.extraHeaders == nil { // not already initialized from flags.
-		h.InitHeaders()
-	}
+	//if h.extraHeaders == nil { // not already initialized from flags.
+	//	h.InitHeaders()
+	//}
+
+	h.InitHeaders()
 	allHeaders := h.extraHeaders
 	payloadLen := len(h.Payload)
 	// If content-type isn't already specified and we have a payload, let's use the
