@@ -16,16 +16,14 @@ package fhttp
 
 import (
 	"fmt"
+	"fortio.org/fortio/log"
+	"fortio.org/fortio/periodic"
+	"fortio.org/fortio/stats"
 	"net/http"
 	"os"
 	"runtime"
 	"runtime/pprof"
 	"sort"
-	"time"
-
-	"fortio.org/fortio/log"
-	"fortio.org/fortio/periodic"
-	"fortio.org/fortio/stats"
 )
 
 // Most of the code in this file is the library-fication of code originally
@@ -53,7 +51,7 @@ type HTTPRunnerResults struct {
 // Run tests http request fetching. Main call being run at the target QPS.
 // To be set as the Function in RunnerOptions.
 func (httpstate *HTTPRunnerResults) Run(tid int, rid int64) {
-	log.Infof("run request(%d) within MainLoop, time:%d, thread: %d", rid, time.Now().UnixNano()/1000/1000, tid)
+	//log.Infof("run request(%d) within MainLoop, time:%d, thread: %d", rid, time.Now().UnixNano()/1000/1000, tid)
 	log.Debugf("Calling in %d", tid)
 	code, body, headerSize := httpstate.client.FetchWithReqID(rid)
 	size := len(body)
